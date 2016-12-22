@@ -26,6 +26,7 @@ metadata {
         command "pause"
 
         attribute "batteryLevel", "number"
+        attribute "jobCount", "number"
         attribute "headline", "string"
         attribute "robotName", "string"
         attribute "preferences_set", "string"
@@ -37,19 +38,17 @@ simulator {
 }
 //Preferences
 preferences {
-
-        //section("Global Settings") {
-	//    input "pollingInterval", "number", title:"Polling interval in minutes", defaultValue: 2,
-        //}
         section("Roomba Credentials") {
             input "roomba_username", "text", title: "Roomba username/blid", required: true, displayDuringSetup: true
             input "roomba_password", "text", title: "Roomba password", required: true, displayDuringSetup: true
 	    input "roomba_host", "string", title:"Roomba Host (Default: Use the Cloud)", defaultValue:""
         }
 }
-def initialize() {
-    log.debug "Initializing.."
-    schedule("0 0/1 * * * ?", poll)
+// Settings updated
+def updated() {
+    //log.debug "Updated settings ${settings}.."
+    schedule("0 0/4 * * * ?", poll)  // 4min polling is normal for irobots
+    poll()
 }
 // Configuration
 def configure() {
@@ -64,7 +63,6 @@ def refresh() {
 //Polling
 def poll() {
     log.debug "Polling for status ----"
-    log.debug "state ${state} and device ${device}"
     sendEvent(name: "headline", value: "Polling the API", displayed: false)
     state.RoombaCmd = "getStatus"
     apiGet()
@@ -74,6 +72,8 @@ tiles {
 
     multiAttributeTile(name:"CLEAN", type:"lighting", width: 6, height: 4, canChangeIcon: true) {
         tileAttribute("device.status", key: "PRIMARY_CONTROL") {
+            attributeState "unknown", label: 'Error', icon: "st.switches.switch.off", backgroundColor: "#bc2323" // No action allowed here
+            attributeState "bin-full", label: 'Bin Full', icon: "st.switches.switch.off", backgroundColor: "#bc2323" // No action allowed here
             attributeState "docked", label: 'Start Clean', action: "switch.on", icon: "st.switches.switch.off", backgroundColor: "#ffffff", nextState: "starting"
             attributeState "docking", label: 'Docking', icon: "st.switches.switch.off", backgroundColor: "#ffa81e" // No action allowed here
             attributeState "starting", label: 'Starting Clean', icon: "st.switches.switch.off", backgroundColor: "#ffffff"
@@ -118,6 +118,9 @@ tiles {
     standardTile("refresh", "device.status", width: 6, height: 2, decoration: "flat") {
         state "default", label:'Refresh', action:"refresh.refresh", icon:"st.secondary.refresh"
     }
+    valueTile("job_history", "device.job_count", width: 1, height: 2, decoration: "flat") {
+        state "default", label:'Number of Cleaning jobs: ${currentValue}'
+    }
     main "CLEAN"
     details(["STATUS",
              "CLEAN", "DOCK", "PAUSE", "RESUME",
@@ -125,7 +128,7 @@ tiles {
 }
 // Switch methods
 def on() {
-    def status = device.latestValue("roomba_state")
+    def status = device.latestValue("status")
     log.debug "On based on state - ${status}"
     if(status == "paused") {
         resume()
@@ -134,7 +137,7 @@ def on() {
     }
 }
 def off() {
-    def status = device.latestValue("roomba_state")
+    def status = device.latestValue("status")
     log.debug "Off based on state - ${status}"
     if(status == "paused") {
         dock()
@@ -144,31 +147,31 @@ def off() {
 }
 // Actions
 def start() {
-    sendEvent(name: "robot_state", value: "starting")
+    sendEvent(name: "status", value: "starting")
     state.RoombaCmd = "start"
     apiGet()
     runIn(30, poll)
 }
 def stop() {
-    sendEvent(name: "robot_state", value: "stopping")
+    sendEvent(name: "status", value: "stopping")
     state.RoombaCmd = "stop"
     apiGet()
     runIn(30, poll)
 }
 def dock() {
-    sendEvent(name: "robot_state", value: "docking")
+    sendEvent(name: "status", value: "docking")
     state.RoombaCmd = "dock"
     apiGet()
     runIn(30, poll)
 }
 def pause() {
-    sendEvent(name: "robot_state", value: "pausing")
+    sendEvent(name: "status", value: "pausing")
     state.RoombaCmd = "pause"
     apiGet()
     runIn(30, poll)
 }
 def resume() {
-    sendEvent(name: "robot_state", value: "resuming")
+    sendEvent(name: "status", value: "resuming")
     state.RoombaCmd = "resume"
     apiGet()
     runIn(30, poll)
@@ -213,7 +216,7 @@ def apiGet() {
     // Path (No changes required)
     def request_path = "/services/v1/rest/Scripto/execute/AspenApiRequest"
     // Query manipulation
-    if( state.RoombaCmd == "getStatus" ) {
+    if( state.RoombaCmd == "getStatus" || state.RoombaCmd == "accumulatedHistorical" || state.RoombaCmd == "missionHistory") {
         request_query = "?blid=${roomba_username}&robotpwd=${roomba_password}&method=${state.RoombaCmd}"
     } else {
         request_query = "?blid=${roomba_username}&robotpwd=${roomba_password}&method=multipleFieldSet&value=%7B%0A%20%20%22remoteCommand%22%20:%20%22${state.RoombaCmd}%22%0A%7D"
@@ -237,44 +240,73 @@ def apiGet() {
             }
             log.debug "response contentType: ${resp.contentType}"
             log.debug "response data: ${resp.data}"
-            if(state.RoombaCmd == "getStatus") {
-
-                //Parsing
-                def data = resp.data
-                //TODO: Mine other data here later? add support for "percent completion"?
-                def rstatus = data.robot_status
-                def robotName = data.robotName
-                def robot_status = new groovy.json.JsonSlurper().parseText(rstatus)
-                log.debug "Robot Status = ${robot_status}"
-
-                def current_cycle = robot_status['cycle']
-                def current_charge = robot_status['batPct']
-                def current_phase = robot_status['phase']
-
-                def new_status = get_robot_status(current_phase, current_cycle, current_charge)
-                def roomba_value = get_robot_enum(current_phase)
-
-                //Set the state object
-                if(roomba_value == "cleaning") {
-                    state.switch = "on"
-                } else {
-                    state.switch = "off"
-                }
-
-                //send events, display final event
-                sendEvent(name: "robotName", value: robotName, displayed: false)
-                sendEvent(name: "batteryLevel", value: current_charge, displayed: false)
-                sendEvent(name: "headline", value: new_status, displayed: false)
-                sendEvent(name: "status", value: roomba_value)
-            }
+            parseResponseByCmd(resp, state.RoombaCmd)
         }
     } catch (e) {
         log.error "something went wrong: $e"
     }
 }
-def get_robot_enum(current_phase) {
-    log.debug "Enter get_robot_enum"
-    if(current_phase == "charge") {
+def parseResponseByCmd(resp, command) {
+    //Parsing
+    def data = resp.data
+    if(command == "getStatus") {
+        setStatus(data)
+    } else if(command == "accumulatedHistorical" ) {
+        //readSummaryInfo -- same as getStatus but easier to parse
+    } else if(command == "missionHistory") {
+        //readMissionHistory -- get results about last 30 jobs -- Out of scope for device-type?
+    }
+}
+def setStatus(data) {
+    //TODO: Mine other data here later? add support for "percent completion"?
+    def rstatus = data.robot_status
+    def robotName = data.robotName
+    def mission = data.mission
+    def runstats = data.bbrun
+    def cschedule = data.cleanSchedule
+    def pmaint = data.preventativeMaintenance
+    def robot_status = new groovy.json.JsonSlurper().parseText(rstatus)
+    def robot_history = new groovy.json.JsonSlurper().parseText(mission)
+    def runtime_stats = new groovy.json.JsonSlurper().parseText(runstats)
+    def schedule = new groovy.json.JsonSlurper().parseText(cschedule)
+    def maintenance = new groovy.json.JsonSlurper().parseText(pmaint)
+    log.debug "Robot Status = ${robot_status}"
+    log.debug "Robot History = ${robot_history}"
+    log.debug "Runtime stats= ${runtime_stats}"
+    log.debug "Robot schedule= ${schedule}"
+    log.debug "Robot Maintenance= ${maintenance}"
+    def current_cycle = robot_status['cycle']
+    def current_charge = robot_status['batPct']
+    def current_phase = robot_status['phase']
+    def num_mins_running = robot_status['mssnM']
+    def flags = robot_status['flags']  // Flag 1/5 == almost-full bin? not sure what this means?
+    def readyCode = robot_status['notReady']  // 16 - bin is full, other 'helpful' errors to display?
+    def num_cleaning_jobs = robot_history['nMssn']
+    def num_dirt_detected = runtime_stats['nScrubs']
+    def total_job_time = runtime_stats['hr']
+    
+
+    def new_status = get_robot_status(current_phase, current_cycle, current_charge, readyCode)
+    def roomba_value = get_robot_enum(current_phase, readyCode)
+    log.debug("Robot updates -- ${roomba_value} + ${new_status}")
+    //Set the state object
+    if(roomba_value == "cleaning") {
+        state.switch = "on"
+    } else {
+        state.switch = "off"
+    }
+
+    //send events, display final event
+    sendEvent(name: "robotName", value: robotName, displayed: false)
+    sendEvent(name: "jobCount", value: num_cleaning_jobs, displayed: false)
+    sendEvent(name: "batteryLevel", value: current_charge, displayed: false)
+    sendEvent(name: "headline", value: new_status, displayed: false)
+    sendEvent(name: "status", value: roomba_value)
+}
+def get_robot_enum(current_phase, readyCode) {
+    if(readyCode == 16) {
+        return "bin-full"
+    } else if(current_phase == "charge") {
         return "docked"
     } else if(current_phase == "hmUsrDock") {
         return "docking"
@@ -283,16 +315,18 @@ def get_robot_enum(current_phase) {
     } else if(current_phase == "run") {
         return "cleaning"
     } else {
-        log.error "Unknown phase - Raw 'robot_status': ${robot_state}. Add to 'get_robot_enum'"
+        log.error "Unknown phase - Raw 'robot_status': ${status}. Add to 'get_robot_enum'"
         return "unknown"
     }
 }
-def get_robot_status(current_phase, current_cycle, current_charge) {
+def get_robot_status(current_phase, current_cycle, current_charge, readyCode) {
     log.debug "Enter get_robot_status"
 
     def robotName = device.latestValue("robotName")
 
-    if(current_phase == "charge") {
+    if(readyCode == 16) {
+      return "${robotName} bin is full. Empty bin to continue."
+    } else if(current_phase == "charge") {
         if (current_charge == 100) {
             return "${robotName} is Docked/Fully Charged"
         } else {
@@ -301,12 +335,11 @@ def get_robot_status(current_phase, current_cycle, current_charge) {
     } else if(current_phase == "hmUsrDock") {
         return "${robotName} is returning home"
     } else if(current_phase == "run") {
-        return "${robotName} is cleaning (${current_cycle} cycle - Battery: ${current_charge}%)"
+        return "${robotName} is cleaning (${current_cycle} cycle)"
     } else if(current_phase == "pause" || current_phase == "stop") {
         return "Paused - 'Dock' or 'Resume'?"
     }
 
     log.error "Unknown phase - ${current_phase}."
-    return "Unknown phase (${current_phase} - code changes required!"
+    return "Error - refresh to continue. Code changes required if problem persists."
 }
-
