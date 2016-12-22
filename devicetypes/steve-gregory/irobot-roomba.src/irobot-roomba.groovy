@@ -39,15 +39,20 @@ simulator {
 //Preferences
 preferences {
         section("Roomba Credentials") {
+            input title: "Roomba Credentials", description: "The username/password can be retrieved via node.js & dorita980", displayDuringSetup: true, type: "paragraph", element: "paragraph"
             input "roomba_username", "text", title: "Roomba username/blid", required: true, displayDuringSetup: true
-            input "roomba_password", "text", title: "Roomba password", required: true, displayDuringSetup: true
-	    input "roomba_host", "string", title:"Roomba Host (Default: Use the Cloud)", defaultValue:""
+            input "roomba_password", "password", title: "Roomba password", required: true, displayDuringSetup: true
+            input "roomba_host", "string", title:"Roomba Host (Default: Use the Cloud)", defaultValue:""
+        }
+        section("Misc.") {
+            input title: "Polling Interval", description: "This feature allows you to change the frequency of polling for the robot in minutes (1-59)", displayDuringSetup: true, type: "paragraph", element: "paragraph"
+            input "pollInterval", "number", title: "Polling Interval", description: "Change polling frequency (in minutes)", defaultValue:4, range: "1..59", required: true, displayDuringSetup: true
         }
 }
 // Settings updated
 def updated() {
-    //log.debug "Updated settings ${settings}.."
-    schedule("0 0/4 * * * ?", poll)  // 4min polling is normal for irobots
+    //log.debug "Updated settings ${settings}..
+    schedule("0 0/${settings.pollInterval} * * * ?", poll)  // 4min polling is normal for irobots
     poll()
 }
 // Configuration
@@ -207,7 +212,7 @@ def apiGet() {
         sendEvent(name: "preferences_set", value: "missing", displayed: false)
         return
     } else if(state.preferences_set != "missing") {
-    	sendEvent(name: "preferences_set", value: "ready", displayed: false)
+        sendEvent(name: "preferences_set", value: "ready", displayed: false)
     }
 
     state.AssetID = "ElPaso@irobot!${roomba_username}"
