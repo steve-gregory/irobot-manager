@@ -26,7 +26,8 @@ metadata {
         command "pause"
 
         attribute "batteryLevel", "number"
-        attribute "jobCount", "number"
+        attribute "totalJobs", "number"
+        attribute "totalJobHrs", "number"
         attribute "headline", "string"
         attribute "robotName", "string"
         attribute "preferences_set", "string"
@@ -77,7 +78,7 @@ tiles {
 
     multiAttributeTile(name:"CLEAN", type:"lighting", width: 6, height: 4, canChangeIcon: true) {
         tileAttribute("device.status", key: "PRIMARY_CONTROL") {
-            attributeState "unknown", label: 'Error', icon: "st.switches.switch.off", backgroundColor: "#bc2323" // No action allowed here
+            attributeState "error", label: 'Error', icon: "st.switches.switch.off", backgroundColor: "#bc2323" // No action allowed here
             attributeState "bin-full", label: 'Bin Full', icon: "st.switches.switch.off", backgroundColor: "#bc2323" // No action allowed here
             attributeState "docked", label: 'Start Clean', action: "switch.on", icon: "st.switches.switch.off", backgroundColor: "#ffffff", nextState: "starting"
             attributeState "docking", label: 'Docking', icon: "st.switches.switch.off", backgroundColor: "#ffa81e" // No action allowed here
@@ -100,10 +101,10 @@ tiles {
         state "cleaning", label: 'Not on Dock', backgroundColor: "#ffffff", nextState: "docking"
         state "pausing", label: 'Not on Dock', backgroundColor: "#ffffff", nextState: "docking" // No action allowed here
         state "paused", label: 'Dock', action: "dock", backgroundColor: "#ffffff", nextState: "docking"
-        state "resuming", label: 'Not on Dock', backgroundColor: "#ffffff" // No action allowed here
+        state "resuming", label: 'Not on Dock', backgroundColor: "#ffffff", defaultState: true // No action allowed here
     }
     standardTile("PAUSE", "device.status", width: 2, height: 2) {
-        state "docked", label: 'Pause', backgroundColor: "#ffffff" // No action allowed here
+        state "docked", label: 'Pause', backgroundColor: "#ffffff", defaultState: true // No action allowed here
         state "docking", label: 'Pause', backgroundColor: "#ffffff" // No action allowed here
         state "starting", label: 'Pause', backgroundColor: "#ffffff" // No action allowed here
         state "cleaning", label: 'Pause', action: "pause", backgroundColor: "#ffffff"
@@ -112,7 +113,7 @@ tiles {
         state "resuming", label: 'Pause', backgroundColor: "#ffffff" // No action allowed here
     }
     standardTile("RESUME", "device.status", width: 2, height: 2) {
-        state "docked", label: 'Resume', backgroundColor: "#ffffff" // No action allowed here
+        state "docked", label: 'Resume', backgroundColor: "#ffffff", defaultState: true // No action allowed here
         state "docking", label: 'Resume', backgroundColor: "#ffffff" // No action allowed here
         state "starting", label: 'Resume', backgroundColor: "#ffffff" // No action allowed here
         state "cleaning", label: 'Resume', backgroundColor: "#ffffff" // No action allowed here
@@ -123,13 +124,19 @@ tiles {
     standardTile("refresh", "device.status", width: 6, height: 2, decoration: "flat") {
         state "default", label:'Refresh', action:"refresh.refresh", icon:"st.secondary.refresh"
     }
-    valueTile("job_history", "device.job_count", width: 1, height: 2, decoration: "flat") {
-        state "default", label:'Number of Cleaning jobs: ${currentValue}'
+    valueTile("job_count", "device.totalJobs", width: 3, height: 1, decoration: "flat") {
+        state "default", label:'Number of Cleaning Jobs:\n${currentValue} jobs'
+    }
+    valueTile("job_hr_count", "device.totalJobHrs", width: 3, height: 1, decoration: "flat") {
+        state "default", label:'Total Job Time:\n${currentValue} hours'
+    }
+    valueTile("current_job_time", "device.runtimeMins", width: 3, height: 1, decoration: "flat") {
+        state "default", label:'Current Job Runtime:\n${currentValue} minutes'
     }
     main "CLEAN"
     details(["STATUS",
              "CLEAN", "DOCK", "PAUSE", "RESUME",
-             "refresh"])
+             "refresh", "job_count", "job_hr_count", "current_job_time"])
 }
 // Switch methods
 def on() {
@@ -284,8 +291,8 @@ def setStatus(data) {
     def current_charge = robot_status['batPct']
     def current_phase = robot_status['phase']
     def num_mins_running = robot_status['mssnM']
-    def flags = robot_status['flags']  // Flag 1/5 == almost-full bin? not sure what this means?
-    def readyCode = robot_status['notReady']  // 16 - bin is full, other 'helpful' errors to display?
+    def flags = robot_status['flags']  // Unknown what 'Flags' 0/1/2/5 mean?
+    def readyCode = robot_status['notReady']
     def num_cleaning_jobs = robot_history['nMssn']
     def num_dirt_detected = runtime_stats['nScrubs']
     def total_job_time = runtime_stats['hr']
@@ -293,6 +300,7 @@ def setStatus(data) {
 
     def new_status = get_robot_status(current_phase, current_cycle, current_charge, readyCode)
     def roomba_value = get_robot_enum(current_phase, readyCode)
+
     log.debug("Robot updates -- ${roomba_value} + ${new_status}")
     //Set the state object
     if(roomba_value == "cleaning") {
@@ -303,14 +311,20 @@ def setStatus(data) {
 
     //send events, display final event
     sendEvent(name: "robotName", value: robotName, displayed: false)
-    sendEvent(name: "jobCount", value: num_cleaning_jobs, displayed: false)
+    sendEvent(name: "totalJobHrs", value: total_job_time, displayed: false)
+    sendEvent(name: "totalJobs", value: num_cleaning_jobs, displayed: false)
+    sendEvent(name: "runtimeMins", value: num_mins_running, displayed: false)
     sendEvent(name: "batteryLevel", value: current_charge, displayed: false)
     sendEvent(name: "headline", value: new_status, displayed: false)
     sendEvent(name: "status", value: roomba_value)
 }
 def get_robot_enum(current_phase, readyCode) {
-    if(readyCode == 16) {
-        return "bin-full"
+    if(readyCode != 0) {
+        if(readyCode == 16) {
+            return "bin-full"
+        } else {
+            return "error"
+        }
     } else if(current_phase == "charge") {
         return "docked"
     } else if(current_phase == "hmUsrDock") {
@@ -320,8 +334,20 @@ def get_robot_enum(current_phase, readyCode) {
     } else if(current_phase == "run") {
         return "cleaning"
     } else {
+        //"Stuck" phase falls into this category.
         log.error "Unknown phase - Raw 'robot_status': ${status}. Add to 'get_robot_enum'"
-        return "unknown"
+        return "error"
+    }
+}
+def parse_not_ready_status(readyCode) {
+    if(readyCode == 16) {
+      return "${robotName} bin is full. Empty bin to continue."
+    } else if(readyCode == 7) {
+      return "${robotName} is not upright. Place robot on flat surface to continue."
+    } else if (readyCode == 1) {
+      return "${robotName} is stuck. Move robot to continue."
+    } else {
+      return "${robotName} returned notReady=${readyCode}. See iRobot app for details."
     }
 }
 def get_robot_status(current_phase, current_cycle, current_charge, readyCode) {
@@ -329,8 +355,8 @@ def get_robot_status(current_phase, current_cycle, current_charge, readyCode) {
 
     def robotName = device.latestValue("robotName")
 
-    if(readyCode == 16) {
-      return "${robotName} bin is full. Empty bin to continue."
+    if(readyCode != 0) {
+      return parse_not_ready_status(readyCode)
     } else if(current_phase == "charge") {
         if (current_charge == 100) {
             return "${robotName} is Docked/Fully Charged"
