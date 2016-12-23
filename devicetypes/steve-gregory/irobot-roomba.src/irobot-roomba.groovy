@@ -18,6 +18,7 @@ metadata {
         capability "Switch"
         capability "Refresh"
         capability "Polling"
+        capability "Consumable"
         capability "Configuration"
 
         command "dock"
@@ -60,6 +61,17 @@ def updated() {
 def configure() {
     log.debug "Configuring.."
     poll()
+}
+//Consumable
+def setConsumableStatus(statusString) {
+    log.debug "User requested setting the Consumable Status - ${statusString}"
+    def status = device.latestValue("status")
+    log.debug "Setting value based on last roomba state - ${status}"
+    if(status == "bin-full") {
+        return "maintenance_required"
+    } else {
+        return "good"
+    }
 }
 //Refresh
 def refresh() {
@@ -309,6 +321,12 @@ def setStatus(data) {
         state.switch = "off"
     }
 
+    if(status == "bin-full") {
+        state.consumableStatus = "maintenance_required"
+    } else {
+        state.consumableStatus = "good"
+    }
+
     //send events, display final event
     sendEvent(name: "robotName", value: robotName, displayed: false)
     sendEvent(name: "totalJobHrs", value: total_job_time, displayed: false)
@@ -317,6 +335,8 @@ def setStatus(data) {
     sendEvent(name: "batteryLevel", value: current_charge, displayed: false)
     sendEvent(name: "headline", value: new_status, displayed: false)
     sendEvent(name: "status", value: roomba_value)
+    sendEvent(name: "switch", value: state.switch)
+    sendEvent(name: "consumableStatus", value: state.consumableStatus)
 }
 def get_robot_enum(current_phase, readyCode) {
     if(readyCode != 0) {
