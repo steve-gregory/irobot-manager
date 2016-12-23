@@ -13,18 +13,32 @@
 *  for the specific language governing permissions and limitations under the License.
 *
 */
+
+/*Known NotReady states*/
+def getRoombaStates() {
+    def ROOMBA_READY = 0
+    def ROOMBA_STUCK = 1
+    def ROOMBA_BIN_FULL = 16
+    def ROOMBA_NOT_UPRIGHT = 7
+    def ROOMBA_IN_THE_DARK = 8
+    def ROOMBA_STATES = ['ready': ROOMBA_READY, 'stuck': ROOMBA_STUCK, 'full': ROOMBA_BIN_FULL, 'tilted': ROOMBA_NOT_UPRIGHT, 'dark': ROOMBA_IN_THE_DARK]
+    return ROOMBA_STATES
+}
 metadata {
     definition (name: "Roomba 9xx - Virtual Switch", namespace: "Steve-Gregory", author: "Steve-Gregory") {
         capability "Switch"
         capability "Refresh"
         capability "Polling"
         capability "Consumable"
+        capability "Timed Session"
         capability "Configuration"
 
         command "dock"
         command "refresh"
         command "resume"
         command "pause"
+        command "cancel"
+        command "pauseAndDock"
 
         attribute "batteryLevel", "number"
         attribute "totalJobs", "number"
@@ -33,6 +47,10 @@ metadata {
         attribute "robotName", "string"
         attribute "preferences_set", "string"
         attribute "status", "string"
+        //For ETA heuristic
+        attribute "lastSqft", "number"
+        attribute "lastRuntime", "number"
+        attribute "lastDate", "string"
     }
 }
 // simulator metadata
@@ -51,87 +69,52 @@ preferences {
             input "pollInterval", "number", title: "Polling Interval", description: "Change polling frequency (in minutes)", defaultValue:4, range: "1..59", required: true, displayDuringSetup: true
         }
 }
-// Settings updated
-def updated() {
-    //log.debug "Updated settings ${settings}..
-    schedule("0 0/${settings.pollInterval} * * * ?", poll)  // 4min polling is normal for irobots
-    poll()
-}
-// Configuration
-def configure() {
-    log.debug "Configuring.."
-    poll()
-}
-//Consumable
-def setConsumableStatus(statusString) {
-    log.debug "User requested setting the Consumable Status - ${statusString}"
-    def status = device.latestValue("status")
-    log.debug "Setting value based on last roomba state - ${status}"
-    if(status == "bin-full") {
-        return "maintenance_required"
-    } else {
-        return "good"
-    }
-}
-//Refresh
-def refresh() {
-    log.debug "Executing 'refresh'"
-    poll()
-}
-//Polling
-def poll() {
-    log.debug "Polling for status ----"
-    sendEvent(name: "headline", value: "Polling the API", displayed: false)
-    state.RoombaCmd = "getStatus"
-    apiGet()
-}
 // UI tile definitions
 tiles {
-
-    multiAttributeTile(name:"CLEAN", type:"lighting", width: 6, height: 4, canChangeIcon: true) {
+    multiAttributeTile(name:"CLEAN", type:"generic", width: 6, height: 4, canChangeIcon: true) {
         tileAttribute("device.status", key: "PRIMARY_CONTROL") {
-            attributeState "error", label: 'Error', icon: "st.switches.switch.off", backgroundColor: "#bc2323" // No action allowed here
-            attributeState "bin-full", label: 'Bin Full', icon: "st.switches.switch.off", backgroundColor: "#bc2323" // No action allowed here
+            attributeState "error", label: 'Error', icon: "st.switches.switch.off", backgroundColor: "#bc2323"
+            attributeState "bin-full", label: 'Bin Full', icon: "st.switches.switch.off", backgroundColor: "#bc2323"
             attributeState "docked", label: 'Start Clean', action: "switch.on", icon: "st.switches.switch.off", backgroundColor: "#ffffff", nextState: "starting"
-            attributeState "docking", label: 'Docking', icon: "st.switches.switch.off", backgroundColor: "#ffa81e" // No action allowed here
+            attributeState "docking", label: 'Docking', icon: "st.switches.switch.off", backgroundColor: "#ffa81e"
             attributeState "starting", label: 'Starting Clean', icon: "st.switches.switch.off", backgroundColor: "#ffffff"
-            attributeState "cleaning", label: 'Stop Clean', action: "stop", icon: "st.switches.switch.on", backgroundColor: "#79b821"
-            attributeState "pausing", label: 'Stop Clean', icon: "st.switches.switch.on", backgroundColor: "#79b821" // No action allowed here
+            attributeState "cleaning", label: 'Stop Clean', action: "stop", icon: "st.switches.switch.on", backgroundColor: "#79b821", nextState: "pausing"
+            attributeState "pausing", label: 'Stop Clean', icon: "st.switches.switch.on", backgroundColor: "#79b821"
             attributeState "paused", label: 'Send Home', action: "switch.off", icon: "st.switches.switch.on", backgroundColor: "#79b821", nextState: "docking"
-            attributeState "resuming", label: 'Stop Clean', icon: "st.switches.switch.on", backgroundColor: "#79b821" // No action allowed here
+            attributeState "resuming", label: 'Stop Clean', icon: "st.switches.switch.on", backgroundColor: "#79b821"
         }
         tileAttribute("device.headline", key: "SECONDARY_CONTROL") {
            attributeState "default", label:'${currentValue}'
         }
-        tileAttribute("device.batteryLevel", key: "SLIDER_CONTROL") {
+        tileAttribute("device.batteryLevel", key: "VALUE_CONTROL") {
         }
     }
     standardTile("DOCK", "device.status", width: 2, height: 2) {
-        state "docked", label: 'Docked', backgroundColor: "#79b821" // No action allowed here
-        state "docking", label: 'Docking', backgroundColor: "#ffa81e" // No action allowed here
-        state "starting", label: 'UnDocking', backgroundColor: "#ffa81e" // No action allowed here
+        state "docked", label: 'Docked', backgroundColor: "#79b821"
+        state "docking", label: 'Docking', backgroundColor: "#ffa81e"
+        state "starting", label: 'UnDocking', backgroundColor: "#ffa81e"
         state "cleaning", label: 'Not on Dock', backgroundColor: "#ffffff", nextState: "docking"
-        state "pausing", label: 'Not on Dock', backgroundColor: "#ffffff", nextState: "docking" // No action allowed here
+        state "pausing", label: 'Not on Dock', backgroundColor: "#ffffff", nextState: "docking"
         state "paused", label: 'Dock', action: "dock", backgroundColor: "#ffffff", nextState: "docking"
-        state "resuming", label: 'Not on Dock', backgroundColor: "#ffffff", defaultState: true // No action allowed here
+        state "resuming", label: 'Not on Dock', backgroundColor: "#ffffff", defaultState: true
     }
     standardTile("PAUSE", "device.status", width: 2, height: 2) {
-        state "docked", label: 'Pause', backgroundColor: "#ffffff", defaultState: true // No action allowed here
-        state "docking", label: 'Pause', backgroundColor: "#ffffff" // No action allowed here
-        state "starting", label: 'Pause', backgroundColor: "#ffffff" // No action allowed here
+        state "docked", label: 'Pause', backgroundColor: "#ffffff", defaultState: true
+        state "docking", label: 'Pause', backgroundColor: "#ffffff"
+        state "starting", label: 'Pause', backgroundColor: "#ffffff"
         state "cleaning", label: 'Pause', action: "pause", backgroundColor: "#ffffff"
-        state "pausing", label: 'Pausing..', backgroundColor: "#79b821" // No action allowed here
-        state "paused", label: 'Paused', backgroundColor: "#79b821" // No action allowed here
-        state "resuming", label: 'Pause', backgroundColor: "#ffffff" // No action allowed here
+        state "pausing", label: 'Pausing..', backgroundColor: "#79b821"
+        state "paused", label: 'Paused', backgroundColor: "#79b821"
+        state "resuming", label: 'Pause', backgroundColor: "#ffffff"
     }
     standardTile("RESUME", "device.status", width: 2, height: 2) {
-        state "docked", label: 'Resume', backgroundColor: "#ffffff", defaultState: true // No action allowed here
-        state "docking", label: 'Resume', backgroundColor: "#ffffff" // No action allowed here
-        state "starting", label: 'Resume', backgroundColor: "#ffffff" // No action allowed here
-        state "cleaning", label: 'Resume', backgroundColor: "#ffffff" // No action allowed here
-        state "pausing", label: 'Resume', backgroundColor: "#79b821" // No action allowed here
+        state "docked", label: 'Resume', backgroundColor: "#ffffff", defaultState: true
+        state "docking", label: 'Resume', backgroundColor: "#ffffff"
+        state "starting", label: 'Resume', backgroundColor: "#ffffff"
+        state "cleaning", label: 'Resume', backgroundColor: "#ffffff"
+        state "pausing", label: 'Resume', backgroundColor: "#79b821"
         state "paused", label: 'Resume', action: "resume", backgroundColor: "#ffffff"
-        state "resuming", label: 'Resuming..', backgroundColor: "#79b821" // No action allowed here
+        state "resuming", label: 'Resuming..', backgroundColor: "#79b821"
     }
     standardTile("refresh", "device.status", width: 6, height: 2, decoration: "flat") {
         state "default", label:'Refresh', action:"refresh.refresh", icon:"st.secondary.refresh"
@@ -145,13 +128,80 @@ tiles {
     valueTile("current_job_time", "device.runtimeMins", width: 3, height: 1, decoration: "flat") {
         state "default", label:'Current Job Runtime:\n${currentValue} minutes'
     }
+    valueTile("current_job_sqft", "device.runtimeSqft", width: 3, height: 1, decoration: "flat") {
+        state "default", label:'Current Job Sqft:\n${currentValue} ft'
+    }
+    valueTile("current_job_time_estimated", "device.timeRemaining", width: 3, height: 1, decoration: "flat") {
+        state "default", label:'Estimated Completion Time:\n${currentValue} minutes'
+    }
+    valueTile("current_job_sqft_estimated", "device.sqftRemaining", width: 3, height: 1, decoration: "flat") {
+        state "default", label:'Estimated Sqft Remaining:\n${currentValue} ft'
+    }
     main "CLEAN"
     details(["STATUS",
              "CLEAN", "DOCK", "PAUSE", "RESUME",
-             "refresh", "job_count", "job_hr_count", "current_job_time"])
+             "refresh",
+             "current_job_time", "current_job_time_estimated",
+             "current_job_sqft", "current_job_sqft_estimated",
+             "job_hr_count", "job_count"
+             ])
+}
+// Settings updated
+def updated() {
+    //log.debug "Updated settings ${settings}..
+    schedule("0 0/${settings.pollInterval} * * * ?", poll)  // 4min polling is normal for irobots
+    poll()
+}
+// Configuration
+def configure() {
+    log.debug "Configuring.."
+    poll()
+}
+//Timed Session
+def setTimeRemaining(timeNumber) {
+    log.debug "User requested setting the Time remaining to ${timeNumber}"
+    return
+}
+//Consumable
+def setConsumableStatus(statusString) {
+    log.debug "User requested setting the Consumable Status - ${statusString}"
+    def status = device.latestValue("status")
+    log.debug "Setting value based on last roomba state - ${status}"
+
+    if(roomba_value == "bin-full") {
+        // Optionally this could be 'replace'?
+        state.consumable = "maintenance_required"
+    } else if(roomba_value == "error"){
+        state.consumable = "missing"
+    } else {
+        state.consumable = "good"
+    }
+    return state.consumable
+}
+//Refresh
+def refresh() {
+    log.debug "Executing 'refresh'"
+    poll()
+}
+//Polling
+def pollHistory() {
+    log.debug "Polling for missionHistory ----"
+    sendEvent(name: "headline", value: "Polling history API", displayed: false)
+    state.RoombaCmd = "missionHistory"
+    apiGet()
+}
+def poll() {
+    //Get historical data first
+    pollHistory()
+    //Then poll for current status
+    log.debug "Polling for status ----"
+    sendEvent(name: "headline", value: "Polling status API", displayed: false)
+    state.RoombaCmd = "getStatus"
+    apiGet()
 }
 // Switch methods
 def on() {
+    // Always start roomba
     def status = device.latestValue("status")
     log.debug "On based on state - ${status}"
     if(status == "paused") {
@@ -161,44 +211,57 @@ def on() {
     }
 }
 def off() {
+    // Always return to dock..
+
     def status = device.latestValue("status")
     log.debug "Off based on state - ${status}"
     if(status == "paused") {
         dock()
     } else {
-        stop()
+        pauseAndDock()
     }
 }
-// Actions
+// Timed Session
 def start() {
     sendEvent(name: "status", value: "starting")
     state.RoombaCmd = "start"
     apiGet()
-    runIn(30, poll)
+    runIn(15, poll)
 }
 def stop() {
     sendEvent(name: "status", value: "stopping")
     state.RoombaCmd = "stop"
     apiGet()
-    runIn(30, poll)
+    runIn(15, poll)
 }
-def dock() {
-    sendEvent(name: "status", value: "docking")
-    state.RoombaCmd = "dock"
+def pauseAndDock() {
+    sendEvent(name: "status", value: "pausing")
+    state.RoombaCmd = "pause"
     apiGet()
-    runIn(30, poll)
+    dock()
 }
 def pause() {
     sendEvent(name: "status", value: "pausing")
     state.RoombaCmd = "pause"
     apiGet()
-    runIn(30, poll)
+    runIn(15, poll)
+}
+def cancel() {
+    off()
+}
+
+// Actions
+def dock() {
+    sendEvent(name: "status", value: "docking")
+    state.RoombaCmd = "dock"
+    apiGet()
+    runIn(15, poll)
 }
 def resume() {
     sendEvent(name: "status", value: "resuming")
     state.RoombaCmd = "resume"
     apiGet()
-    runIn(30, poll)
+    runIn(15, poll)
 }
 // API methods
 def parse(description) {
@@ -271,18 +334,42 @@ def apiGet() {
     }
 }
 def parseResponseByCmd(resp, command) {
-    //Parsing
     def data = resp.data
     if(command == "getStatus") {
         setStatus(data)
     } else if(command == "accumulatedHistorical" ) {
-        //readSummaryInfo -- same as getStatus but easier to parse
+        /*readSummaryInfo -- same as getStatus but easier to parse*/
     } else if(command == "missionHistory") {
-        //readMissionHistory -- get results about last 30 jobs -- Out of scope for device-type?
+        setMissionHistory(data)
     }
 }
+def convertDate(dateStr) {
+    return Date.parse("yyyyMMdd H:m", dateStr)
+}
+def setMissionHistory(data) {
+    def lastRuntime = -1
+    def lastSqft = -1
+    def lastDate = ""
+    def mstatus = data.status
+    def robot_history = data.missions
+
+    robot_history.sort{ convertDate(it.date) }.each{ mission ->
+        if(mission.done == 'ok') {
+            lastSqft = mission.sqft
+            lastRuntime = mission.runM
+            lastDate = mission.date
+        }
+    }
+
+    state.lastRuntime = lastRuntime
+    state.lastSqft = lastSqft
+    state.lastDate = lastDate
+
+    sendEvent(name: "lastRuntime", value: state.lastRuntime, displayed: false)
+    sendEvent(name: "lastSqft", value: state.lastSqft, displayed: false)
+    sendEvent(name: "lastDate", value: state.lastDate, displayed: false)
+}
 def setStatus(data) {
-    //TODO: Mine other data here later? add support for "percent completion"?
     def rstatus = data.robot_status
     def robotName = data.robotName
     def mission = data.mission
@@ -294,14 +381,15 @@ def setStatus(data) {
     def runtime_stats = new groovy.json.JsonSlurper().parseText(runstats)
     def schedule = new groovy.json.JsonSlurper().parseText(cschedule)
     def maintenance = new groovy.json.JsonSlurper().parseText(pmaint)
-    log.debug "Robot Status = ${robot_status}"
-    log.debug "Robot History = ${robot_history}"
+    log.debug "Robot status = ${robot_status}"
+    log.debug "Robot history = ${robot_history}"
     log.debug "Runtime stats= ${runtime_stats}"
     log.debug "Robot schedule= ${schedule}"
-    log.debug "Robot Maintenance= ${maintenance}"
+    log.debug "Robot maintenance= ${maintenance}"
     def current_cycle = robot_status['cycle']
     def current_charge = robot_status['batPct']
     def current_phase = robot_status['phase']
+    def current_sqft = robot_status['sqft']
     def num_mins_running = robot_status['mssnM']
     def flags = robot_status['flags']  // Unknown what 'Flags' 0/1/2/5 mean?
     def readyCode = robot_status['notReady']
@@ -321,31 +409,66 @@ def setStatus(data) {
         state.switch = "off"
     }
 
-    if(status == "bin-full") {
-        state.consumableStatus = "maintenance_required"
+    /* Consumable state-changes */
+    if(roomba_value == "bin-full") {
+        state.consumable = "maintenance_required"
+    } else if(roomba_value == "error"){
+        state.consumable = "missing"
     } else {
-        state.consumableStatus = "good"
+        state.consumable = "good"
     }
 
-    //send events, display final event
+    /* Timed Session state-changes */
+    if(roomba_value == "cleaning") {
+        state.sessionStatus = "running"
+    } else if (roomba_value == "paused") {
+        state.sessionStatus = "paused"
+    } else if (roomba_value == "docked" || roomba_value == "docking") {
+        state.sessionStatus = "canceled"
+    } else {
+        state.sessionStatus = "stopped"
+    }
+
+    /* Misc. state-changes */
+    if(state.lastRuntime == -1) {
+        state.timeRemaining = -1
+    } else {
+        state.timeRemaining = state.lastRuntime - num_mins_running
+    }
+    if(state.lastSqft == -1) {
+        state.sqftRemaining = -1
+    } else {
+        state.sqftRemaining = state.lastSqft - current_sqft
+    }
+
+    /*send events, display final event*/
     sendEvent(name: "robotName", value: robotName, displayed: false)
+    sendEvent(name: "runtimeMins", value: num_mins_running, displayed: false)
+    sendEvent(name: "runtimeSqft", value: current_sqft, displayed: false)
+    sendEvent(name: "timeRemaining", value: state.timeRemaining, displayed: false)
+    sendEvent(name: "sqftRemaining", value: state.sqftRemaining, displayed: false)
     sendEvent(name: "totalJobHrs", value: total_job_time, displayed: false)
     sendEvent(name: "totalJobs", value: num_cleaning_jobs, displayed: false)
-    sendEvent(name: "runtimeMins", value: num_mins_running, displayed: false)
     sendEvent(name: "batteryLevel", value: current_charge, displayed: false)
     sendEvent(name: "headline", value: new_status, displayed: false)
     sendEvent(name: "status", value: roomba_value)
     sendEvent(name: "switch", value: state.switch)
-    sendEvent(name: "consumableStatus", value: state.consumableStatus)
+    sendEvent(name: "sessionStatus", value: state.sessionStatus)
+    sendEvent(name: "consumable", value: state.consumable)
 }
+
 def get_robot_enum(current_phase, readyCode) {
-    if(readyCode != 0) {
-        if(readyCode == 16) {
+    def ROOMBA_STATES = getRoombaStates()
+
+    if(readyCode != ROOMBA_STATES['ready']) {
+        if(readyCode == ROOMBA_STATES['full']) {
             return "bin-full"
-        } else {
+        } else if(readyCode != ROOMBA_STATES['dark']) {
             return "error"
         }
-    } else if(current_phase == "charge") {
+    }
+
+    if(current_phase == "charge") {
         return "docked"
     } else if(current_phase == "hmUsrDock") {
         return "docking"
@@ -361,23 +484,27 @@ def get_robot_enum(current_phase, readyCode) {
 }
 def parse_not_ready_status(readyCode) {
     def robotName = device.latestValue("robotName")
+    def ROOMBA_STATES = getRoombaStates()
 
-    if(readyCode == 16) {
+    if(readyCode == ROOMBA_STATES['full']) {
       return "${robotName} bin is full. Empty bin to continue."
-    } else if(readyCode == 7) {
+    } else if(readyCode == ROOMBA_STATES['tilted']) {
       return "${robotName} is not upright. Place robot on flat surface to continue."
-    } else if (readyCode == 1) {
+    } else if (readyCode == ROOMBA_STATES['stuck']) {
       return "${robotName} is stuck. Move robot to continue."
     } else {
       return "${robotName} returned notReady=${readyCode}. See iRobot app for details."
     }
 }
+
 def get_robot_status(current_phase, current_cycle, current_charge, readyCode) {
     log.debug "Enter get_robot_status"
 
     def robotName = device.latestValue("robotName")
+    def ROOMBA_STATES = getRoombaStates()
 
-    if(readyCode != 0) {
+    // 0 and 8 are "okay to run"
+    if(readyCode != ROOMBA_STATES['ready'] && readyCode != ROOMBA_STATES['dark']) {
       return parse_not_ready_status(readyCode)
     } else if(current_phase == "charge") {
         if (current_charge == 100) {
