@@ -360,6 +360,8 @@ def get_robot_enum(current_phase, readyCode) {
     }
 }
 def parse_not_ready_status(readyCode) {
+    def robotName = device.latestValue("robotName")
+
     if(readyCode == 16) {
       return "${robotName} bin is full. Empty bin to continue."
     } else if(readyCode == 7) {
