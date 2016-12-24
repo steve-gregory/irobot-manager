@@ -26,7 +26,7 @@ def getRoombaStates() {
     return ROOMBA_STATES
 }
 metadata {
-    definition (name: "Roomba iRobot", namespace: "steve-gregory", author: "Steve Gregory") {
+    definition (name: "iRobot Roomba", namespace: "steve-gregory", author: "Steve Gregory") {
         capability "Switch"
         capability "Refresh"
         capability "Polling"
