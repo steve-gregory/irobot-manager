@@ -10,11 +10,6 @@ The Device types work together to provide integration to the SmartThings ecosyst
 ## Contributors
 * @Elfege
 
-## What's New
-
- * Please see the [iRobot Manager Community Forum Link](https://community.smartthings.com/t/release-nest-manager-4-0/) for New Features
- * Instructions are here [iRobot Manager Things that are Smart Wiki](http://thingsthataresmart.wiki/index.php?title=Nest_Manager)
-
 ## Links
 #### [GitHub Project Issues Link](https://github.com/steve-gregory/irobot-manager/issues)
 
