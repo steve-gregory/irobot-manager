@@ -1,6 +1,6 @@
 /**
-*  iRobot Roomba 
-*. 9xx - Virtual Switch
+*  iRobot Roomba v1.0
+*. 900 series - Virtual Switch
 *
 *  Copyright 2016 Steve-Gregory
 *
