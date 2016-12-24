@@ -1,5 +1,6 @@
 /**
-*  Roomba 9xx - Virtual Switch
+*  iRobot Roomba 
+*. 9xx - Virtual Switch
 *
 *  Copyright 2016 Steve-Gregory
 *
