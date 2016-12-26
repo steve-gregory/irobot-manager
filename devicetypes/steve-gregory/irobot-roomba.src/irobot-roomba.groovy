@@ -323,9 +323,7 @@ def apiGet() {
     ]
     try {
         httpGet(httpRequest) { resp ->
-            resp.headers.each {
-                log.debug "${it.name} : ${it.value}"
-            }
+            log.debug "response Headers:" + resp.headers.collect { "${it.name}:${it.value}" }
             log.debug "response contentType: ${resp.contentType}"
             log.debug "response data: ${resp.data}"
             parseResponseByCmd(resp, state.RoombaCmd)
