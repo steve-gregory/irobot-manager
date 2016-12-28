@@ -18,10 +18,9 @@ definition(
     author: "Steve Gregory",
     description: "Integrate your iRobot with SmartThings.",
     category: "SmartThings Labs",
-    iconUrl: "https://lh6.googleusercontent.com/EcO2sRmIxvEnp4kn_ZC2idm-jCOmQCLQmpkS0I2s2X5darJKUtA_YIhRxwVlQT_7QAwqyuYV=w1920-h988",
-    iconX2Url: "https://lh6.googleusercontent.com/EcO2sRmIxvEnp4kn_ZC2idm-jCOmQCLQmpkS0I2s2X5darJKUtA_YIhRxwVlQT_7QAwqyuYV=w1920-h988",
-    iconX3Url: "https://lh6.googleusercontent.com/MN7t7IzsKV03dhN-Df5gFY_qxI89r69sVSaH4lDLSel8PXix8YX2m5m5riYGTrNLEfLf7rx0=w1920-h988",
-    singleInstance: true
+    iconUrl: "https://raw.githubusercontent.com/steve-gregory/irobot-manager/master/Images/roomba-manager-small.jpg",
+    iconX2Url: "https://raw.githubusercontent.com/steve-gregory/irobot-manager/master/Images/roomba-manager-small.jpg",
+    iconX3Url: "https://raw.githubusercontent.com/steve-gregory/irobot-manager/master/Images/roomba-manager-small.jpg"
 )
 
 preferences {
@@ -30,8 +29,9 @@ preferences {
 }
 
 def initializeRobots() {
+    log.info "Enter initializeRobots"
     def showUninstall = username != null && password != null
-    return dynamicPage(name: "initializeRobots", title: "Connect your iRobot", nextPage:"selectRobot", uninstall:showUninstall) {
+    return dynamicPage(name: "initializeRobots", title: "Connect your iRobot", install:true, uninstall:showUninstall) {
         section("What is your Robots IP address _or_ username/password:") {
             input "ipaddress", "text", title: "IP Address", required:false, autoCorrect:false
             input "username", "text", title: "Username/blid", autoCorrect:false
@@ -126,10 +126,7 @@ private ipAddressToUsername() {
     return result
 }
 private doLogin() {
-
-
-
-
+    log.info "Enter doLogin()"
     // Path (No changes required)
     def request_host = "https://irobot.axeda.com"
     def request_path = "/services/v1/rest/Scripto/execute/AspenApiRequest"
@@ -169,84 +166,48 @@ private doLogin() {
     return result
 }
 
-
-
-def selectRobot() {
-    if(!username || !password) {
-     /*Show a picture of (Place the robot on the home base and press the HOME button for about 2 seconds until a series of tones is played and the WIFI light flashes)*/
-        password = ipAddressToPasswd()
-        username = ipAddressToUsername()
-    }
-    def loginResult = doLogin()
-    
-    if(loginResult.success) {
-        log.info "Login response data ${loginResult.data}"
-        def robotName = loginResult.data.robotName
-        def options = robotDiscovered(robotName)
-
-        return dynamicPage(name: "selectRobot", title: "iRobot", install:true, uninstall:true) {
-            section("Select which iRobot to connect") {
-                input(name: "selectedRobots", type: "enum", required:true, options:options)
-            }
-        }
-    } else {
-        log.error "login result false"
-        return dynamicPage(name: "selectRobot", title: "iRobot", install:false, uninstall:true, nextPage:"") {
-            section("") {
-                paragraph "If IP address ONLY is used: Place the robot on the home base, then press the HOME button for about 2 seconds (until a series of tones is played). Then attempt to login again"
-                paragraph "If username/password ONLY is used: Verify the accuracy of your credentials and attempt to login again."
-            }
-       }
-    }
-}
-
-def robotDiscovered(robotName) {
-    log.info "Enter robotDiscovered(${robotName})"
-    def devices = [["name" : "${robotName}", "dni" : "iRobot-Roomba-${robotName}"],]
-    return devices
-}
-
-
 def installed() {
-    log.info "Enter Installed"
+    log.info "Enter Installed()"
     initialize()
 }
 
 def updated() {
-    log.info "Enter Updated"
+    log.info "Enter Updated()"
     unsubscribe()
     initialize()
 }
 
 def initialize() {
-
-    if (selectRobot) {
-        addDevice()
-    }
+    log.info "Enter initialize()"
+    addDevice()
 
 }
 
 //CHILD DEVICE METHODS
 def addDevice() {
-  def devices = getRobotDevices()
-  log.trace "Adding childs $devices - $selectedRobots"
-    selectedRobots.each { dni ->
-            def d = getChildDevice(dni)
-            if(!d) {
-                    def newCar = devices.find { (it.dni) == dni }
-                    d = addChildDevice(app.namespace, "iRobot Roomba", dni, null, [name:"Roomba", label:"iRobot"])
-                    log.trace "created ${d.name} with id $dni"
-            } else {
-                    log.trace "found ${d.name} with id $dni already exists"
-            }
+    log.info "Enter addDevice"
+    def item = getRobotDevice()
+    log.info "Adding childs $item"
+    try {
+        def d = getChildDevice(item.dni)
+        def props = [name:"iRobot Roomba", label: item.name, preferences:[pollInterval:4, roomba_username:username, roomba_password:password], completedSetup: true]
+        if(!d) {
+            d = addChildDevice(app.namespace, "iRobot Roomba", item.dni, null, props)
+            log.warn "created ${d.name} with id ${item.dni} and ${d.properties} that should be == ${props}"
+        } else {
+            log.info "found ${d.name} with id ${item.dni} already exists with ${d.properties}"
+        }
+    } catch(e) {
+        log.error "Error creating device: ${e}"
     }
 }
 
-def getRobotDevices() {
-
+def getRobotDevice() {
+    log.info "Enter getRobotDevice"
     def result = doLogin()
-    if(result.success) {
-        def devices = robotDiscovered(result.data.robotName)
-    }
-    return devices
+    log.info "getRobotDevice result ${result}"
+    def robotName = result.data.robotName
+    log.info "getRobotDevice robotName ${robotName}"
+    def device = ["name" : "${robotName}", "dni" : "irobot-roomba-9xx-${robotName}"]
+    return device
 }
