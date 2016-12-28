@@ -196,7 +196,12 @@ def addDevice() {
             log.warn "created ${d.name} with id ${item.dni} and ${d.properties} that should be == ${props}"
         } else {
             log.info "found ${d.name} with id ${item.dni} already exists with ${d.properties}"
+            
         }
+        log.info "attempting to update device"
+        d.update()
+        d.updated()
+        
     } catch(e) {
         log.error "Error creating device: ${e}"
     }
